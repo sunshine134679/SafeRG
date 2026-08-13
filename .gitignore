@@ -1,0 +1,10 @@
+# 构建产物（任意层级）
+bin/
+obj/
+artifacts*/
+
+# 二进制发布物（通过 GitHub Releases 分发，不进 git）
+*.exe
+
+# 用户/编辑器
+*.user

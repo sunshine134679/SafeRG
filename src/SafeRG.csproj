@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>srg</AssemblyName>
+    <RootNamespace>SafeRG</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Version>1.2.0</Version>
+    <!-- 单文件、独立（自带运行时），win-x64 -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 提供 GB18030/GBK 等代码页编码，用于兼容旧的中文（GBK）源文件 -->
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>
