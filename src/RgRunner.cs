@@ -152,6 +152,16 @@ public static class RgRunner
         bool stderrHadErrors = false;
         var errTask = Task.Run(() => { stderrHadErrors = ForwardStderr(proc.StandardError); });
 
+        // text 模式 + 有限结果：截断保全路径（rg 并行遍历目录使输出顺序不稳定 ->
+        // 流式硬截断会让"哪些文件被截掉"随机，Agent 可能误判缺失文件无匹配；
+        // 1.3.1 起缓冲截断，保证结果包含全部匹配文件，文件集稳定）
+        if (!o.JsonMode && !o.FilesWithMatches && o.MaxResults > 0)
+        {
+            var safe = RunTruncationSafe(proc, o);
+            errTask.Wait();
+            return safe;
+        }
+
         bool truncated = false;
         int matchCount = 0;
         string? line;
@@ -189,6 +199,77 @@ public static class RgRunner
     }
 
     static string BoolJson(bool b) => b ? "true" : "false";
+
+    /// <summary>
+    /// text 模式 + --max-results 的截断保全路径：
+    /// 缓冲前 N 个 match 行；溢出后继续消费流（-m N+1 保证每文件最多 N+1 行，消费有界），
+    /// 为每个"新出现的文件"保留首行；流结束时用"行数 &gt; 1 的文件"的最后一行腾位，
+    /// 保证截断结果包含所有匹配文件（文件集稳定，不随 rg 遍历顺序变化）。
+    /// </summary>
+    static (int Code, bool Truncated) RunTruncationSafe(Process proc, Options o)
+    {
+        var buffer = new List<string>();
+        var fileCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var pendingFiles = new HashSet<string>(StringComparer.Ordinal);
+        var pendingFirst = new List<(string Line, string File)>();
+        int matchCount = 0;
+        bool truncated = false;
+
+        string? line;
+        while ((line = proc.StandardOutput.ReadLine()) != null)
+        {
+            if (!IsMatchLine(line, jsonMode: false, o.NoColumn))
+            {
+                if (!truncated) buffer.Add(line); // 溢出后的 context 行随其 match 丢弃
+                continue;
+            }
+            string file = ExtractFile(line, o.NoColumn);
+            if (matchCount >= o.MaxResults)
+            {
+                truncated = true;
+                if (!fileCounts.ContainsKey(file) && pendingFiles.Add(file))
+                    pendingFirst.Add((line, file)); // 新文件首行：保全
+                continue;
+            }
+            matchCount++;
+            fileCounts[file] = fileCounts.TryGetValue(file, out int c) ? c + 1 : 1;
+            buffer.Add(line);
+        }
+
+        // 为每个新文件首行腾位：移除"行数 > 1 的文件"的最后一个 match 行（及跟随的 context），
+        // 保持其余行原顺序；每文件只剩 1 行时放弃插入（维持 ≤ N 行输出契约）
+        foreach ((string pLine, string pFile) in pendingFirst)
+        {
+            int victim = -1;
+            for (int i = buffer.Count - 1; i >= 0; i--)
+            {
+                if (!IsMatchLine(buffer[i], jsonMode: false, o.NoColumn)) continue;
+                if (fileCounts[ExtractFile(buffer[i], o.NoColumn)] > 1) { victim = i; break; }
+            }
+            if (victim < 0) break;
+            fileCounts[ExtractFile(buffer[victim], o.NoColumn)]--;
+            int end = victim + 1;
+            while (end < buffer.Count && !IsMatchLine(buffer[end], jsonMode: false, o.NoColumn)) end++;
+            buffer.RemoveRange(victim, end - victim);
+            buffer.Add(pLine);
+            fileCounts[pFile] = 1;
+        }
+
+        foreach (string b in buffer) Console.Out.WriteLine(b);
+        if (truncated)
+            Console.Error.WriteLine($"[SafeRG] Results truncated: showing first {o.MaxResults} matches.");
+        proc.WaitForExit();
+        return (truncated ? 0 : proc.ExitCode, truncated);
+    }
+
+    /// <summary>从 match 行提取文件路径（path:line:col:text 或 --no-column 的 path:line:text）。</summary>
+    static string ExtractFile(string line, bool noColumn)
+    {
+        int colon = line.LastIndexOf(':');            // text 段前的冒号
+        int prev = line.LastIndexOf(':', colon - 1);  // line 段前的冒号
+        int start = noColumn ? prev : line.LastIndexOf(':', prev - 1);
+        return line[..start];
+    }
 
     /// <summary>
     /// Long Query Mode 第一步：rg -F -l 查找包含 anchor 的文件（候选集）。
