@@ -30,7 +30,7 @@ public static class Help
         Console.WriteLine("  --no-ignore         搜索 .gitignore 等忽略规则排除的文件（与 --hidden 相互独立）");
         Console.WriteLine("  -g, --glob 模式     文件过滤，可重复。可靠写法：--glob \"!**/node_modules/**\"");
         Console.WriteLine("  -C, --context N     显示匹配行前后 N 行上下文（也支持 -C0 / -C1 / -C10 紧凑形式）");
-        Console.WriteLine("  --max-results N     结果上限（默认 200；0 = 不限制）。达到上限会提前终止扫描");
+        Console.WriteLine("  --max-results N     结果上限（默认 200；0 = 不限制）。全局上限：跨所有文件累计，达到即截断并在 stderr 提示（--require-complete 下 exit 3）");
         Console.WriteLine("  --max-line-length N 匹配行输出最大长度（默认 8192 字符，0 = 不限制）");
         Console.WriteLine("  --no-column         输出 path:line:text（去掉列号；仅文本模式，JSON 模式拒绝）");
         Console.WriteLine("  --require-complete  结果被截断时返回 exit 3（默认截断仍返回 0）");

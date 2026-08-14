@@ -1,5 +1,16 @@
 # SafeRG Changelog
 
+## 1.3.3 — 2026-08-14
+
+**文档澄清**（外部对比测试反馈处置）：
+
+- `--max-results` 帮助文本明确"全局上限：跨所有文件累计，达到即截断并在 stderr 提示
+  （--require-complete 下 exit 3）"，消除 per-file 歧义。
+- 经完整复核，外部报告的两个缺陷（`--max-results` off-by-one；文本模式截断无 exit 3/
+  无提示）在官方 1.3.0/1.3.2 上均不可复现：`--max-results 1`→1 行、默认→200 行、
+  `--require-complete` 文本截断→exit 3 + stderr 提示；报告的"N+1 行"系其测试 harness
+  将 stderr 提示行 `2>&1` 合并计入输出行数所致。
+
 ## 1.3.2 — 2026-08-14
 
 **修复：截断结果集完全确定性（BUG-R4-06，双 AI 强化 Round 4 闭环）**
