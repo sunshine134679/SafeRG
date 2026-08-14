@@ -93,7 +93,7 @@ try {
     Test 'R04 GBK 自动补搜命中' {
         Assert ($r.Code -eq 0) "code=$($r.Code) out=$(Out-Snippet $r.Out)"
         Assert ($r.Out -match 'gbk\.txt') '未命中 GBK 文件'
-        Assert ($r.Out -match 'gbk 编码') '缺少补搜 warning'
+        Assert ($r.Out -match 'legacy 编码') '缺少补搜 warning'
     }
     $r = Invoke-Srg @('--encoding', 'gbk', '交易完成', $root)
     Test 'R04b 显式 --encoding gbk' { Assert ($r.Code -eq 0 -and $r.Out -match 'gbk\.txt') "code=$($r.Code)" }

@@ -101,18 +101,19 @@ try {
     $r = Invoke-Srg @('--encoding', 'windows-1252', 'café', (Join-Path $root 'cp1252.txt'))
     Test 'RC008a CP1252 显式 --encoding' { Assert ($r.Code -eq 0 -and $r.Out -match 'cp1252\.txt') "code=$($r.Code) out=$(Out-Snippet $r.Out)" }
     $r = Invoke-Srg @('café', (Join-Path $root 'cp1252.txt'))
-    Test 'RC008b CP1252 不自动误判（无结果+warning）' {
+    Test 'RC008b CP1252 不自动误判（无结果+一行 warning）' {
         Assert ($r.Code -eq 1) "code=$($r.Code)（CP1252 不自动识别，宁缺毋滥）"
-        Assert ($r.Out -match 'windows-1252') "warning 未提及 windows-1252: $(Out-Snippet $r.Out)"
+        Assert ($r.Out -match 'Search may be incomplete') "缺风险提示: $(Out-Snippet $r.Out)"
+        Assert (([regex]::Matches($r.Out, 'Search may be incomplete')).Count -eq 1) 'warning 超过一行'
     }
 
     # ===== RC009/RC010: Shift-JIS =====
     $r = Invoke-Srg @('--encoding', 'shift-jis', '日本語', (Join-Path $root 'sjis.txt'))
     Test 'RC009 Shift-JIS 显式 --encoding' { Assert ($r.Code -eq 0 -and $r.Out -match 'sjis\.txt') "code=$($r.Code) out=$(Out-Snippet $r.Out)" }
     $r = Invoke-Srg @('日本語', $root)
-    Test 'RC010 Shift-JIS 无匹配时 warning 提及' {
+    Test 'RC010 Shift-JIS 无匹配时一行 warning' {
         Assert ($r.Code -eq 1) "code=$($r.Code)"
-        Assert ($r.Out -match 'shift-jis') "warning 未提及 shift-jis: $(Out-Snippet $r.Out)"
+        Assert ($r.Out -match 'Search may be incomplete') "缺风险提示: $(Out-Snippet $r.Out)"
     }
 
     # ===== RC011-RC013: -CN 兼容 =====

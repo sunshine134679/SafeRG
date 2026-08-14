@@ -95,18 +95,25 @@ public static class RgRunner
         {
             psi.ArgumentList.Add("--color"); psi.ArgumentList.Add("never"); // AI 输出不要 ANSI 颜色
             psi.ArgumentList.Add("--no-heading");
-            psi.ArgumentList.Add("--column");                               // path:line:col:text
+            psi.ArgumentList.Add("-n");                                     // 显式行号（rg 单文件 + --no-column 时默认不显示行号）
+            if (!o.NoColumn) psi.ArgumentList.Add("--column");              // path:line:col:text（默认；--no-column → path:line:text）
             psi.ArgumentList.Add("--with-filename");                        // 单文件搜索也输出路径前缀（保证输出契约稳定）
         }
         psi.ArgumentList.Add("--path-separator"); psi.ArgumentList.Add("/"); // 输出路径分隔符统一为 /（rg 对目录搜索根会用平台分隔符拼接）
         if (literal || o.FixedStrings) psi.ArgumentList.Add("-F");          // 字面量（默认）；--regex 下的 -F 透传
         if (multiline) psi.ArgumentList.Add("-U");
         if (o.CaseInsensitive == true) psi.ArgumentList.Add("-i");
-        else if (o.CaseInsensitive == false || !literal) psi.ArgumentList.Add("--case-sensitive");
-        // 注：Regex 模式默认也区分大小写（关闭 rg 的 smart-case），行为可预测
+        else if (o.CaseInsensitive == false || (!literal && o.SmartCase != true)) psi.ArgumentList.Add("--case-sensitive");
+        // 注：Regex 模式默认区分大小写（关闭 rg 的 smart-case）；-S/--smart-case 显式时透传给 rg 处理
+        if (o.SmartCase == true) psi.ArgumentList.Add("-S");
         if (o.InvertMatch) psi.ArgumentList.Add("-v");
         if (o.Hidden) psi.ArgumentList.Add("--hidden");
+        if (o.NoIgnore) psi.ArgumentList.Add("--no-ignore");
         if (o.TextMode) psi.ArgumentList.Add("--text");
+        if (o.FilesWithMatches) psi.ArgumentList.Add("-l");
+        if (o.OnlyMatching) psi.ArgumentList.Add("-o");
+        foreach (string t in o.Types) { psi.ArgumentList.Add("-t"); psi.ArgumentList.Add(t); }
+        foreach (string ta in o.TypeAdds) { psi.ArgumentList.Add("--type-add"); psi.ArgumentList.Add(ta); }
         if (o.Encoding is string enc && enc != "auto")
         {
             psi.ArgumentList.Add("--encoding");
@@ -151,9 +158,10 @@ public static class RgRunner
         while ((line = proc.StandardOutput.ReadLine()) != null)
         {
             // 截断只在读到"第 N+1 个 match 行"时触发；context 行始终输出（属于已输出的 match）
-            bool isMatch = IsMatchLine(line, o.JsonMode);
+            // -l 模式每行 = 一个文件（rg 输出路径列表，无 line:col 结构）
+            bool isMatch = o.FilesWithMatches ? true : IsMatchLine(line, o.JsonMode, o.NoColumn);
             if (isMatch && o.MaxResults > 0 && matchCount >= o.MaxResults) { truncated = true; break; }
-            line = o.JsonMode ? line : ProcessOutputLine(line, o.MaxLineLength); // 超长行保护（仅文本模式）
+            line = o.JsonMode ? line : ProcessOutputLine(line, o.MaxLineLength, o.NoColumn); // 超长行保护（仅文本模式）
             Console.Out.WriteLine(line);
             if (isMatch) matchCount++;
         }
@@ -196,7 +204,11 @@ public static class RgRunner
         psi.ArgumentList.Add("-l");
         psi.ArgumentList.Add("-F");
         if (o.CaseInsensitive == true) psi.ArgumentList.Add("-i");
+        if (o.SmartCase == true) psi.ArgumentList.Add("-S");
         if (o.Hidden) psi.ArgumentList.Add("--hidden");
+        if (o.NoIgnore) psi.ArgumentList.Add("--no-ignore");
+        foreach (string t in o.Types) { psi.ArgumentList.Add("-t"); psi.ArgumentList.Add(t); }
+        foreach (string ta in o.TypeAdds) { psi.ArgumentList.Add("--type-add"); psi.ArgumentList.Add(ta); }
         if (o.Encoding is string enc && enc != "auto")
         {
             psi.ArgumentList.Add("--encoding");
@@ -221,36 +233,92 @@ public static class RgRunner
         return (files, proc.ExitCode == 2);
     }
 
+    /// <summary>
+    /// rg --files 文件枚举（应用与搜索相同的过滤：hidden/no-ignore/type/type-add/glob），
+    /// 用于 legacy 风险探测（DetectLegacyRisk）。
+    /// </summary>
+    public static List<string> ListFiles(Options o, string[] paths)
+    {
+        var psi = NewPsi();
+        psi.ArgumentList.Add("--color"); psi.ArgumentList.Add("never");
+        psi.ArgumentList.Add("--path-separator"); psi.ArgumentList.Add("/");
+        psi.ArgumentList.Add("--files");
+        if (o.Hidden) psi.ArgumentList.Add("--hidden");
+        if (o.NoIgnore) psi.ArgumentList.Add("--no-ignore");
+        foreach (string t in o.Types) { psi.ArgumentList.Add("-t"); psi.ArgumentList.Add(t); }
+        foreach (string ta in o.TypeAdds) { psi.ArgumentList.Add("--type-add"); psi.ArgumentList.Add(ta); }
+        foreach (string g in o.Globs) { psi.ArgumentList.Add("-g"); psi.ArgumentList.Add(g); }
+        psi.ArgumentList.Add("--");
+        foreach (string p in paths) psi.ArgumentList.Add(p);
+
+        using var proc = new Process { StartInfo = psi };
+        proc.Start();
+
+        var files = new List<string>();
+        string? line;
+        while ((line = proc.StandardOutput.ReadLine()) != null)
+            if (line.Length > 0) files.Add(line);
+        ForwardStderr(proc.StandardError);
+        proc.WaitForExit();
+        return files;
+    }
+
     // ---- 输出识别 ----
 
-    /// <summary>文本模式 match 行：path:line:col:text（--with-filename 保证单文件也有路径）。
-    /// 注意：不使用 RegexOptions.Compiled（NativeAOT 不支持 Compiled 正则）。</summary>
-    static readonly Regex MatchLineRe = new(@"^(.+):(\d+):(\d+):");
-
-    /// <summary>完整 match 行（含 text 段），用于超长行截断（注意：MatchLineRe 只有 3 个 group）。</summary>
+    /// <summary>文本模式 match 行完整解析（含 text 段），用于超长行截断。</summary>
     static readonly Regex MatchLineFullRe = new(@"^(.+):(\d+):(\d+):(.*)$");
+    static readonly Regex MatchLineNoColFullRe = new(@"^(.+):(\d+):(.*)$");
 
     /// <summary>文本模式 context 行：path-line-text。</summary>
     static readonly Regex ContextLineRe = new(@"^(.+)-(\d+)-(.*)$");
 
-    static bool IsMatchLine(string line, bool jsonMode)
+    /// <summary>
+    /// 文本模式 match 行识别（手写，无正则开销——Fast Path 核心）：
+    /// 结构 path:line:col:text（默认）或 path:line:text（--no-column），
+    /// 从右往左验证倒数第二/第三个冒号段是数字（与原正则 ^(.+):(\d+):(\d+): 语义等价）。
+    /// </summary>
+    static bool IsMatchLine(string line, bool jsonMode, bool noColumn)
     {
         if (jsonMode) return line.Contains("\"type\":\"match\"", StringComparison.Ordinal);
-        return MatchLineRe.IsMatch(line);
+        int colon = line.LastIndexOf(':');
+        if (colon < 0) return false;
+        int prev = line.LastIndexOf(':', colon - 1);
+        if (prev < 0) return false;
+        if (!IsDigits(line, prev + 1, colon - prev - 1)) return false;
+        if (!noColumn)
+        {
+            int prev2 = line.LastIndexOf(':', prev - 1);
+            if (prev2 < 0) return false;
+            if (!IsDigits(line, prev2 + 1, prev - prev2 - 1)) return false;
+        }
+        return true;
+    }
+
+    static bool IsDigits(string s, int start, int len)
+    {
+        if (len <= 0) return false;
+        for (int i = start; i < start + len; i++)
+            if (s[i] < '0' || s[i] > '9') return false;
+        return true;
     }
 
     /// <summary>
     /// 超长行保护（--max-line-length）：match 行以匹配位置为中心截取窗口（保留匹配本身），
-    /// context 行从行首截断，均带明确省略标记。不改变 path:line:col 前缀。
+    /// --no-column 时无列信息 → 行首截断；context 行行首截断；均带明确省略标记。
+    /// 不改变 path:line[:col] 前缀。
     /// </summary>
-    static string ProcessOutputLine(string line, int maxLen)
+    static string ProcessOutputLine(string line, int maxLen, bool noColumn)
     {
         if (maxLen <= 0 || line.Length <= maxLen + 64) return line; // 快速路径
-        Match m = MatchLineFullRe.Match(line);
+        Match m = noColumn ? MatchLineNoColFullRe.Match(line) : MatchLineFullRe.Match(line);
         if (m.Success)
         {
-            string text = m.Groups[4].Value;
+            string text = noColumn ? m.Groups[3].Value : m.Groups[4].Value;
             if (text.Length <= maxLen) return line;
+            if (noColumn)
+            {
+                return $"{m.Groups[1].Value}:{m.Groups[2].Value}:{text[..maxLen]} [... {text.Length - maxLen} chars omitted ...]";
+            }
             int col = int.Parse(m.Groups[3].Value);        // 匹配起始字节列（1-based）
             int matchChar = CharIndexAtByte(text, col - 1); // 字节列 → 字符索引
             int half = maxLen / 2;

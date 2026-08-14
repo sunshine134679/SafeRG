@@ -49,10 +49,15 @@ public static class LongQuery
             throw new SafeRgException($"候选文件过多（{candidates.Count} 个），anchor 区分度不足。请缩短查询或换用更独特的文本。");
 
         // ---- 第二步：逐文件验证完整查询（换行规范化后比较）----
-        StringComparison cmp = o.CaseInsensitive == true ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        // -S/--smart-case：全小写 query 忽略大小写（与 rg 一致）；显式 -i/--case-sensitive 优先（Parse 已校验互斥）
+        StringComparison cmp;
+        if (o.CaseInsensitive == true) cmp = StringComparison.OrdinalIgnoreCase;
+        else if (o.SmartCase == true) cmp = IsAllLower(query) ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        else cmp = StringComparison.Ordinal;
 
         int total = 0;
         bool capped = false;
+        var lqFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // -l 模式去重
         foreach (string file in candidates.OrderBy(f => f, StringComparer.Ordinal))
         {
             if (o.MaxResults > 0 && total >= o.MaxResults) { capped = true; break; }
@@ -82,7 +87,15 @@ public static class LongQuery
                 int idx = norm.IndexOf(query, start, cmp);
                 if (idx < 0) break;
                 total++;
-                PrintMatch(o, file, norm, idx);
+                // -l 模式：全文验证命中后才输出文件路径（每文件一次；杜绝 anchor 命中即输出）
+                if (o.FilesWithMatches)
+                {
+                    if (lqFiles.Add(file)) Console.Out.WriteLine(file);
+                }
+                else
+                {
+                    PrintMatch(o, file, norm, idx);
+                }
                 start = idx + Math.Max(1, query.Length);
             }
         }
@@ -109,6 +122,14 @@ public static class LongQuery
     }
 
     static string BoolJson(bool b) => b ? "true" : "false";
+
+    /// <summary>smart-case 判定：query 是否全小写（无大写字母；与 rg 的 smart-case 规则一致）。</summary>
+    static bool IsAllLower(string s)
+    {
+        foreach (char ch in s)
+            if (char.IsUpper(ch)) return false;
+        return true;
+    }
 
     /// <summary>输出匹配位置：文本模式 path:line:col:首行；JSON 模式结构化事件。列号按 UTF-8 字节（与 rg --column 一致）。</summary>
     static void PrintMatch(Options o, string file, string norm, int idx)

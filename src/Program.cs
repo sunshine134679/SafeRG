@@ -14,7 +14,7 @@ namespace SafeRG;
 /// </summary>
 public static class Program
 {
-    public const string Version = "1.2.0";
+    public const string Version = "1.3.0";
 
     /// <summary>超过该长度的查询自动进入 Long Query Mode（anchor 定位 + 全文验证）。</summary>
     public const int LongQueryThreshold = 4000;
@@ -93,6 +93,8 @@ public static class Program
         // ---- 模式间冲突校验 ----
         if (o.InvertMatch && query.Length > LongQueryThreshold)
             throw new SafeRgException("-v（反转匹配）与 Long Query Mode 不兼容。");
+        if (o.OnlyMatching && query.Length > LongQueryThreshold)
+            throw new SafeRgException("-o（只输出匹配片段）与 Long Query Mode 不兼容（Long Query 输出验证后的定位行）。");
 
         (int Code, bool Truncated) result;
         if (o.RegexMode)
@@ -121,25 +123,28 @@ public static class Program
             result = RgRunner.Run(o, query, literal: true, multiline: false, paths);
         }
 
-        // ---- Legacy 编码防静默假阴性 ----
-        // 无匹配 + 查询含非 ASCII + 未显式指定编码（--encoding auto 也触发）：自动尝试 GBK / UTF-16 补搜
+        // ---- Legacy 编码防静默假阴性（降噪版）----
+        // 无匹配 + 查询含非 ASCII + 未显式指定编码：
+        //   1) 可补搜的场景（单行 Literal）先自动尝试 GBK/UTF-16 补搜；
+        //   2) 补搜全 miss 或不可补搜时，做轻量 legacy 风险探测——
+        //      只有实际检测到非 UTF-8 文本文件才输出一行 warning；纯 UTF-8 项目安静 exit 1。
         bool legacyEnabled = o.Encoding == null || o.Encoding == "auto";
-        if (result.Code == 1 && !result.Truncated && legacyEnabled
-            && !o.JsonMode && !o.RegexMode && !o.InvertMatch && ContainsNonAscii(query)
-            && !query.Contains('\n') && query.Length <= LongQueryThreshold)
+        if (result.Code == 1 && !result.Truncated && legacyEnabled && !o.JsonMode && !o.InvertMatch && ContainsNonAscii(query))
         {
-            return LegacyProbe(o, query, paths);
+            bool canProbe = !o.RegexMode && !query.Contains('\n') && query.Length <= LongQueryThreshold;
+            if (canProbe)
+            {
+                (int Code, bool Truncated) probe = LegacyProbe(o, query, paths);
+                if (probe.Code != 1) return probe; // 补搜命中：结果已输出 + 一行 warning
+            }
+            if (DetectLegacyRisk(o, paths, out int legacyCount))
+            {
+                Console.Error.WriteLine("[SafeRG] Search may be incomplete: legacy/non-UTF-8 text files were detected. Use 'srg --help' for encoding options.");
+                if (o.Debug)
+                    Console.Error.WriteLine($"[SafeRG] debug: {legacyCount} 个疑似 legacy 文本文件（非 UTF-8 且非二进制）。");
+            }
         }
-        if (result.Code == 1 && legacyEnabled && !o.JsonMode && ContainsNonAscii(query))
-            PrintLegacyHint(); // 多行/正则/长查询无法可靠补搜：至少给出明确提示
         return result;
-    }
-
-    /// <summary>legacy 编码提示（不额外扫描，零成本防"静默假阴性"）。列表与实际实现一致，不宣传未实现的编码。</summary>
-    static void PrintLegacyHint()
-    {
-        Console.Error.WriteLine(
-            "[SafeRG] Warning: 无匹配。若项目中存在非 UTF-8 / legacy 编码文件（GBK、Shift-JIS、Windows-1252、无 BOM 的 UTF-16 等），结果可能不完整。可用 --encoding auto（自动尝试 gbk / utf-16le / utf-16be），或显式 --encoding gbk / shift-jis / windows-1252 / utf-16le / utf-16be 后重试。");
     }
 
     /// <summary>
@@ -147,10 +152,11 @@ public static class Program
     /// 目录可能同时含多种 legacy 编码文件）。命中文件需通过严格 UTF-8 校验（非 UTF-8 才算真命中，
     /// 过滤 GBK 解码 UTF-8 文件的假匹配）。补搜强制 --text：UTF-16 no BOM 文件原始字节含 NUL，
     /// 目录遍历时 rg 会按二进制跳过，--text 才能按指定编码解码搜索。
+    /// 命中时输出**一行**总结 warning（降噪），详细编码信息进 --debug。
     /// </summary>
     static (int Code, bool Truncated) LegacyProbe(Options o, string query, string[] paths)
     {
-        bool anyReal = false;
+        var hits = new List<string>();
         foreach (string enc in new[] { "gbk", "utf-16le", "utf-16be" })
         {
             Options eo = o.Clone();
@@ -165,12 +171,48 @@ public static class Program
                 catch { /* 读取失败跳过 */ }
             }
             if (real.Count == 0) continue; // 全是合法 UTF-8 → 该编码解码为假匹配，忽略
-            anyReal = true;
-            Console.Error.WriteLine($"[SafeRG] Warning: {real.Count} 个文件为 {enc} 编码（非 UTF-8），已按该编码命中。");
+            hits.Add($"{enc}: {real.Count} 个文件");
             _ = RgRunner.Run(eo, query, literal: true, multiline: false, paths); // 输出该编码的匹配；继续检查下一编码
         }
-        if (anyReal) return (0, false);
-        PrintLegacyHint();
-        return (1, false);
+        if (hits.Count > 0)
+        {
+            Console.Error.WriteLine($"[SafeRG] Warning: {string.Join("，", hits)} 为 legacy 编码（非 UTF-8），已按对应编码命中。");
+            if (o.Debug)
+                Console.Error.WriteLine("[SafeRG] debug: legacy fallback 命中详情见上方各编码输出。");
+            return (0, false);
+        }
+        return (1, false); // 补搜全 miss：由调用方做轻量风险探测决定是否提示
+    }
+
+    /// <summary>
+    /// 轻量 legacy 风险探测：rg --files 枚举（应用与搜索相同的过滤），每文件读前 4096 字节——
+    /// 含 NUL → 二进制（跳过）；严格 UTF-8 解码失败 → 疑似 legacy 文本。
+    /// 仅在"无匹配 + 非 ASCII 查询"时调用（此时已付出补搜成本），纯 UTF-8 项目保持安静。
+    /// </summary>
+    static bool DetectLegacyRisk(Options o, string[] paths, out int legacyCount)
+    {
+        legacyCount = 0;
+        List<string> files = RgRunner.ListFiles(o, paths);
+        int checkedCount = 0;
+        foreach (string f in files)
+        {
+            if (checkedCount >= 10000) break; // 上限保护（超大仓库按采样处理）
+            checkedCount++;
+            try
+            {
+                using var fs = File.OpenRead(f);
+                var head = new byte[4096];
+                int n = fs.Read(head, 0, head.Length);
+                if (n == 0) continue;
+                bool hasNul = false;
+                for (int i = 0; i < n; i++)
+                    if (head[i] == 0) { hasNul = true; break; }
+                if (hasNul) continue; // 二进制
+                byte[] slice = n < head.Length ? head[..n] : head;
+                if (!TextIO.IsStrictUtf8(slice)) legacyCount++;
+            }
+            catch { /* 不可读文件跳过 */ }
+        }
+        return legacyCount > 0;
     }
 }
