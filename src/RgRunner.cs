@@ -18,6 +18,7 @@ public static class RgRunner
 {
     static string? _rgPath;
     static bool? _multilineSupported; // rg >= 13 才支持 -U 多行
+    static bool? _sortSupported;      // rg >= 12 才支持 --sort（截断确定性依赖）
 
     public static string? FindRg()
     {
@@ -50,6 +51,20 @@ public static class RgRunner
                 _multilineSupported = v != null && v >= new Version(13, 0);
             }
             return _multilineSupported.Value;
+        }
+    }
+
+    /// <summary>rg 是否支持 --sort（12.0+）。截断结果确定性（1.3.2）依赖排序输出。</summary>
+    public static bool HasSortSupport
+    {
+        get
+        {
+            if (_sortSupported == null)
+            {
+                Version? v = GetRgVersion(_rgPath!);
+                _sortSupported = v != null && v >= new Version(12, 0);
+            }
+            return _sortSupported.Value;
         }
     }
 
@@ -100,6 +115,9 @@ public static class RgRunner
             psi.ArgumentList.Add("--with-filename");                        // 单文件搜索也输出路径前缀（保证输出契约稳定）
         }
         psi.ArgumentList.Add("--path-separator"); psi.ArgumentList.Add("/"); // 输出路径分隔符统一为 /（rg 对目录搜索根会用平台分隔符拼接）
+        // 输出按路径确定性排序（rg >= 12）：截断结果的文件集与行数分布不再依赖
+        // rg 并行遍历目录的随机顺序（BUG-R3-06/R4-06 根因；1.3.2）
+        if (HasSortSupport) { psi.ArgumentList.Add("--sort"); psi.ArgumentList.Add("path"); }
         if (literal || o.FixedStrings) psi.ArgumentList.Add("-F");          // 字面量（默认）；--regex 下的 -F 透传
         if (multiline) psi.ArgumentList.Add("-U");
         if (o.CaseInsensitive == true) psi.ArgumentList.Add("-i");

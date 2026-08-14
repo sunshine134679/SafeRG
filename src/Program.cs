@@ -14,7 +14,7 @@ namespace SafeRG;
 /// </summary>
 public static class Program
 {
-    public const string Version = "1.3.1";
+    public const string Version = "1.3.2";
 
     /// <summary>超过该长度的查询自动进入 Long Query Mode（anchor 定位 + 全文验证）。</summary>
     public const int LongQueryThreshold = 4000;

@@ -141,8 +141,8 @@ try {
         $matchLines = @($r.Out -split "`n" | Where-Object { $_ -match ':\d+:\d+:' }).Count
         if ($matchLines -gt 200) { throw "match 行 $matchLines > 200" }
     }
-    Test '截断保全: 5 次运行文件集一致' {
-        $d = Join-Path $work 'trunc_dir2'
+    Test '截断保全: 5 次运行 (文件→行数) 映射完全一致（Tester distinct 判定）' {
+        $d = Join-Path $work 'trunc_dir3'
         New-Item -ItemType Directory -Path $d -Force | Out-Null
         $big = (0..200 | ForEach-Object { "big line $_ needle" }) -join "`n"
         $s1 = (0..5 | ForEach-Object { "s1 line $_ needle" }) -join "`n"
@@ -150,10 +150,24 @@ try {
         Write-Utf8 (Join-Path $d 'big.txt') ($big + "`n")
         Write-Utf8 (Join-Path $d 'small1.txt') ($s1 + "`n")
         Write-Utf8 (Join-Path $d 'small2.txt') ($s2 + "`n")
+        $maps = @()
         for ($i = 1; $i -le 5; $i++) {
             $r = Invoke-Srg @('needle', $d)
-            if ($r.Out -notmatch 'small1\.txt') { throw "run$i 缺 small1.txt" }
-            if ($r.Out -notmatch 'small2\.txt') { throw "run$i 缺 small2.txt" }
+            $map = @{}
+            foreach ($ln in ($r.Out -split "`n")) {
+                if ($ln -match '^(.+):\d+:\d+:') {
+                    $name = [System.IO.Path]::GetFileName($Matches[1])
+                    $map[$name] = [int]$map[$name] + 1
+                }
+            }
+            $maps += , $map
+        }
+        $first = $maps[0] | ConvertTo-Json -Compress
+        if ($first -notmatch 'small1') { throw "映射缺 small1: $first" }
+        if ($first -notmatch 'small2') { throw "映射缺 small2: $first" }
+        for ($i = 1; $i -lt 5; $i++) {
+            $cur = $maps[$i] | ConvertTo-Json -Compress
+            if ($cur -ne $first) { throw "run$i 映射不一致: $cur vs $first" }
         }
     }
 } finally {
