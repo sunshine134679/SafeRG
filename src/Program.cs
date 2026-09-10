@@ -123,6 +123,15 @@ public static class Program
             result = RgRunner.Run(o, query, literal: true, multiline: false, paths);
         }
 
+        // ---- 空结果 + 查询像正则：一行提示，防静默假阴性 ----
+        // 字面量默认是对的，但仍留了一条静默假阴性路径：查询里含 "|"、".*"、"^…$" 这类元字符时，
+        // 字面量搜索会给出一个"确定的空结果"（exit 1），调用方无从分辨"文本确实不存在"与
+        // "我想表达的是模式"。门控沿用 legacy 提示的同一哲学：只在无匹配时评估、只认强特征
+        // （见 LooksLikeRegex，避免把 $var、settings( 这类常见字面量片段也报出来）、
+        // 命中即一行 stderr——不动 stdout，不改退出码。
+        if (result.Code == 1 && !result.Truncated && !o.RegexMode && !o.InvertMatch && LooksLikeRegex(query))
+            Console.Error.WriteLine("[SafeRG] hint: no match in literal mode, but the query contains regex metacharacters (|, .*, ^...$, \\d, ...). If you meant a pattern, rerun with --regex.");
+
         // ---- Legacy 编码防静默假阴性（降噪版）----
         // 无匹配 + 查询含非 ASCII + 未显式指定编码：
         //   1) 可补搜的场景（单行 Literal）先自动尝试 GBK/UTF-16 补搜；
@@ -145,6 +154,28 @@ public static class Program
             }
         }
         return result;
+    }
+
+    /// <summary>
+    /// 查询是否"看起来是想写正则"。只用于"无匹配"时给一次提示，因此宁可漏报不可误报：
+    /// 只认强特征；不认裸的 . ( ) [ ] { } * + ? —— 它们在字面量代码片段里太常见，
+    /// 会让提示退化成噪音（例如搜 "settings(" 无果也报"像正则"）。
+    /// </summary>
+    static bool LooksLikeRegex(string q)
+    {
+        if (q.Contains('|')) return true;                                        // 交替：最常见的误用
+        if (q.Contains(".*") || q.Contains(".+")) return true;                   // 通配
+        if (q.Contains("[^")) return true;                                       // 取反字符类
+        if (q.Contains("(?:") || q.Contains("(?=") || q.Contains("(?!") || q.Contains("(?<")) return true;
+        if (q.Length > 0 && (q[0] == '^' || q[q.Length - 1] == '$')) return true; // 行首 / 行尾锚点
+        for (int i = 0; i + 1 < q.Length; i++)
+        {
+            if (q[i] != '\\') continue;
+            char c = q[i + 1];
+            if ("dDwWsSbB".IndexOf(c) >= 0) return true;                         // 字符类转义
+            if (@".^$*+?()[]{}|/\-".IndexOf(c) >= 0) return true;                // 转义元字符
+        }
+        return false;
     }
 
     /// <summary>

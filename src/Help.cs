@@ -52,6 +52,7 @@ public static class Help
         Console.WriteLine("  * 输出契约：match 行 path:line:col:text；context 行 path-line-text");
         Console.WriteLine("    路径分隔符统一为 /（如 C:/Users/.../file.cs:10:2:text）");
         Console.WriteLine("  * 无匹配且查询含非 ASCII 时，自动尝试 GBK/UTF-16 补搜并给出提示（防静默假阴性）");
+        Console.WriteLine("  * 无匹配且查询含明显正则元字符（|、.*、^…$、\\d 等）时，输出一行 stderr 提示，建议改用 --regex（防静默假阴性）");
         Console.WriteLine("  * 二进制文件：目录搜索默认跳过（避免向 Agent 输出二进制垃圾）；显式指定文件时提示 binary file matches");
         Console.WriteLine("    如需强制按文本搜索二进制内容，使用 --text");
         Console.WriteLine("  * 无匹配且查询含非 ASCII 时，自动尝试 GBK/UTF-16 补搜并给出明确提示（防静默假阴性；不猜测 CP1252/SJIS）");
