@@ -44,6 +44,10 @@ srg --regex "pattern" .
    如需更多用 `--max-results N`，N 不要超过 2000 以免灌爆上下文。
 7. **`[SafeRG]` 前缀** 的提示（模式通知/错误）在 stderr；stdout 只有搜索结果，
    解析输出时直接按行解析即可。
+8. **无匹配 + 查询像正则**：若查询含强正则特征（交替、`.*`、`^…$`、`\d` 等）**且无匹配**，
+   stderr 会出现 `[SafeRG] hint: no match in literal mode, but the query contains regex
+   metacharacters ...`。这通常意味着你本想表达模式（例如 `srg "A|B" .` 在字面量模式下
+   只会找字面的 `A|B`）——改用 `--regex` 重跑。**不是错误**：退出码仍是 1，stdout 仍为空。
 
 ## 1.1.0 新增能力（Agent 可用）
 

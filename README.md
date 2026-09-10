@@ -3,10 +3,11 @@
 SafeRG 是 `ripgrep` 的 Windows 安全包装层，专为 **AI Agent**（Codex / Claude Code / OpenCode 等）
 在 PowerShell 7 / CMD / Windows Terminal / VS Code 终端中调用 `rg` 而设计。
 
-当前版本：**1.2.0**（NativeAOT 单文件 3.3MB，启动 ~30ms）
+当前版本：**1.3.4**（NativeAOT 单文件 3.3MB，启动 ~30ms）
 
 它解决的核心痛点：引号转义错误、`$` 被 PowerShell 当变量、`| & ;` 被 Shell 解释、
-正则字符被误匹配、中文乱码、多行/超长文本搜索失败、结果灌爆 AI 上下文、legacy 编码静默假阴性等。
+正则字符被误匹配、中文乱码、多行/超长文本搜索失败、结果灌爆 AI 上下文、legacy 编码静默假阴性、
+以及"查询像正则、却被按字面量搜"造成的静默空结果等。
 
 ## 核心设计
 
@@ -18,6 +19,7 @@ SafeRG 是 `ripgrep` 的 Windows 安全包装层，专为 **AI Agent**（Codex /
 | 多行搜索 | 自动检测换行 → 逐行转义 + `\r?\n` 连接（`rg -U`），兼容 LF 与 CRLF |
 | 超长文本 | >4000 字符自动进入 **Long Query Mode**：提取 anchor → `rg -F -l` 找候选 → 读取文件全文二次验证（隐私：默认不输出查询/anchor 内容，`--debug` 才显示） |
 | UTF-8 | 内部全程 UTF-8；**无匹配且查询含非 ASCII 时自动 GBK/UTF-16 补搜**（防静默假阴性，`--encoding` 可显式指定） |
+| 疑似正则提示 | 无匹配且查询含**强**正则特征（交替、通配、`^…$` 锚点、`\d` 等）时，提示改用 `--regex`；裸标点（`.` `(` `)` `[` `]` `*` `+` `?`）不触发，避免噪音。仅 stderr 一行，stdout / 退出码 / JSON 契约均不变 |
 | 结果保护 | `--max-results` 默认 200（提前终止扫描），`--max-line-length` 默认 8192 字符（1MB 单行防灌爆），`--require-complete` 截断时 exit 3 |
 | 输出契约 | match 行 `path:line:col:text`、context 行 `path-line-text`，路径分隔符统一 `/`；`--json` 机器可读事件流（含 saferg-summary 截断事件） |
 | Exit Code | 0=有匹配，1=无匹配，2=错误，3=结果被截断（仅 `--require-complete` 时） |
@@ -90,7 +92,7 @@ srg --help                              # 帮助
 D:\Tools\SafeRG\
 ├── src\            C# 源码（.NET 8，手写参数解析，零第三方框架）
 ├── scripts\install.ps1   安装脚本（复制 exe + 增量 User PATH）
-├── tests\run-tests.ps1   完整测试套件（43 项，全部通过）
+├── tests\run-tests.ps1   完整测试套件（47 项，全部通过）
 ├── docs\AI-AGENT-GUIDE.md 给 AI Agent 的使用指南
 └── artifacts\      发布产物（srg.exe 单文件）
 ```
@@ -110,5 +112,11 @@ CMD 可用性、单文件独立运行。
 
 ```powershell
 cd D:\Tools\SafeRG\src
-dotnet publish -c Release -o ..\artifacts   # 产出单文件 srg.exe（~67MB，自带 .NET 运行时）
+# 正式产物用 NativeAOT（~3.3MB）。不加 -p:PublishAot=true 会得到 csproj 默认的
+# JIT 自包含版本（~67MB），形态与发布产物不一致。
+dotnet publish -c Release -r win-x64 -p:PublishAot=true -p:PublishSingleFile=false -o ..\artifacts
+# 安装：install.ps1 的默认源就是 ..\artifacts\srg.exe，所以必须先发布再安装；
+# 只跑 install 会把 artifacts 里的旧产物再装一遍。另外必须用 pwsh（7+）：
+# install.ps1 无 BOM 且含中文，Windows PowerShell 5.1 会按 ANSI 解码。
+pwsh -NoProfile -File ..\scripts\install.ps1
 ```

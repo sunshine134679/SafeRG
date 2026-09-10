@@ -254,6 +254,43 @@ try {
         $aloneCode = $LASTEXITCODE
     } finally { Remove-Item $alone -Recurse -Force -ErrorAction SilentlyContinue }
     Test 'T43 单文件独立运行' { if (-not ($aloneCode -eq 0 -and $aloneOut -match 'SafeRG')) { throw "code=$aloneCode out=$(Out-Snippet $aloneOut)" } }
+
+    # ---- T44-T47 疑似正则提示（防静默假阴性）----
+    # 这里必须把 stderr 单独重定向：Invoke-Srg 用 2>&1 合并了两个流，无法断言
+    # "提示只出现在 stderr、stdout 保持干净"。
+    $rxFile = Join-Path $root 'pipe.txt'   # 夹具内容: 'foo | bar'
+    function Invoke-SrgSplit([string[]]$SrgArgs) {
+        $e = Join-Path $root ("err-" + [guid]::NewGuid().ToString('N') + '.txt')
+        $o = & $script:Srg @SrgArgs 2>$e
+        $r = [pscustomobject]@{
+            Code = $LASTEXITCODE
+            Out  = (($o | ForEach-Object { $_.ToString() }) -join "`n")
+            Err  = (Get-Content $e -Raw -ErrorAction SilentlyContinue)
+        }
+        Remove-Item $e -Force -ErrorAction SilentlyContinue
+        return $r
+    }
+    $r44 = Invoke-SrgSplit @('aaa|bbb', $rxFile)               # 无匹配 + 含 |   -> 应提示
+    $r45 = Invoke-SrgSplit @('foo | bar', $rxFile)             # 字面量命中      -> 不提示
+    $r46 = Invoke-SrgSplit @('zzz(absent)', $rxFile)           # 裸括号，非强特征 -> 不提示
+    $r47 = Invoke-SrgSplit @('--regex', 'zzz|absent', $rxFile) # --regex 模式    -> 不提示
+
+    Test 'T44 无匹配+含| 触发提示且 stdout 干净' {
+        if ($r44.Code -ne 1) { throw "期望 exit 1，实际 $($r44.Code)" }
+        if ($r44.Out.Trim().Length -ne 0) { throw "stdout 不应有内容: $(Out-Snippet $r44.Out)" }
+        if ($r44.Err -notmatch 'regex metacharacters') { throw "stderr 未出现提示: $(Out-Snippet $r44.Err)" }
+    }
+    Test 'T45 字面量命中时不提示' {
+        if ($r45.Code -ne 0) { throw "期望 exit 0，实际 $($r45.Code)" }
+        if ($r45.Err -match 'regex metacharacters') { throw "命中时不应提示: $(Out-Snippet $r45.Err)" }
+    }
+    Test 'T46 裸括号不触发提示（只认强特征）' {
+        if ($r46.Code -ne 1) { throw "期望 exit 1，实际 $($r46.Code)" }
+        if ($r46.Err -match 'regex metacharacters') { throw "裸括号不应触发: $(Out-Snippet $r46.Err)" }
+    }
+    Test 'T47 --regex 模式不提示' {
+        if ($r47.Err -match 'regex metacharacters') { throw "--regex 模式不应提示: $(Out-Snippet $r47.Err)" }
+    }
 }
 finally { & $cleanup }
 

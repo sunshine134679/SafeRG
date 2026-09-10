@@ -51,11 +51,10 @@ public static class Help
         Console.WriteLine("  * 查询超过 4000 字符自动进入 Long Query Mode：anchor 定位 + 全文二次验证");
         Console.WriteLine("  * 输出契约：match 行 path:line:col:text；context 行 path-line-text");
         Console.WriteLine("    路径分隔符统一为 /（如 C:/Users/.../file.cs:10:2:text）");
-        Console.WriteLine("  * 无匹配且查询含非 ASCII 时，自动尝试 GBK/UTF-16 补搜并给出提示（防静默假阴性）");
         Console.WriteLine("  * 无匹配且查询含明显正则元字符（|、.*、^…$、\\d 等）时，输出一行 stderr 提示，建议改用 --regex（防静默假阴性）");
+        Console.WriteLine("  * 无匹配且查询含非 ASCII 时，自动尝试 GBK/UTF-16 补搜并给出提示；补搜全 miss 时仅在真的检测到非 UTF-8 文本文件才告警（纯 UTF-8 项目保持安静；不猜测 CP1252/SJIS）");
         Console.WriteLine("  * 二进制文件：目录搜索默认跳过（避免向 Agent 输出二进制垃圾）；显式指定文件时提示 binary file matches");
         Console.WriteLine("    如需强制按文本搜索二进制内容，使用 --text");
-        Console.WriteLine("  * 无匹配且查询含非 ASCII 时，自动尝试 GBK/UTF-16 补搜并给出明确提示（防静默假阴性；不猜测 CP1252/SJIS）");
         Console.WriteLine("  * 所有 [SafeRG] 提示输出到 stderr，stdout 只有搜索结果");
         Console.WriteLine("  * Exit Code：0=搜索完成且有匹配；1=无匹配；2=搜索/参数/IO 错误——注意 exit 2 不保证 stdout 为空，");
         Console.WriteLine("    已确认的部分匹配仍会输出（partial results）；3=结果被截断（仅 --require-complete 时）");
